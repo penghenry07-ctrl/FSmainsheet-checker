@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>财务主表自动检查系统</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--navy:#0f1e35;--navy2:#162844;--blue:#1a6fbe;--blue-l:#2d8eed;--border:#dde3ea;--text:#1a2535;--muted:#6b7c93}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#eef2f7;color:var(--text);min-height:100vh}
+.app-header{background:var(--navy);padding:18px 28px;display:flex;align-items:center;gap:14px;box-shadow:0 2px 12px rgba(0,0,0,.3)}
+.app-header .logo{font-size:28px}.app-header h1{color:#fff;font-size:18px;font-weight:700}
+.app-header p{color:#8fa8c8;font-size:12px;margin-top:2px}
+.main{max-width:900px;margin:0 auto;padding:24px 16px}
+.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 6px rgba(0,0,0,.07)}
+.card h3{font-size:15px;font-weight:700;margin-bottom:12px;color:var(--navy)}
+.notice{background:#fff8e1;border:1px solid #f59e0b;border-radius:8px;padding:12px 16px;font-size:13px;color:#92400e;margin-bottom:16px;line-height:1.7}
+.upload-zone{border:2px dashed var(--blue-l);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;position:relative;transition:all .2s}
+.upload-zone.drag-over{border-color:#f59e0b;background:#fffbf3}
+.upload-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-zone .uicon{font-size:36px;margin-bottom:8px}.upload-zone p{font-size:13px;color:var(--muted)}
+.file-tag{display:flex;align-items:center;gap:8px;background:#f4f6f8;border-radius:8px;padding:9px 12px;font-size:13px;margin-top:8px}
+.file-tag .fname{flex:1;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-tag .sz{font-size:12px;color:var(--muted);flex-shrink:0}
+.file-tag .rm{cursor:pointer;color:#c0392b;font-size:18px;line-height:1;flex-shrink:0;background:none;border:none;padding:0}
+.btn-run{display:block;width:100%;background:var(--navy);color:#fff;border:none;border-radius:10px;padding:14px;font-size:16px;font-weight:700;cursor:pointer;transition:background .2s;margin-top:16px}
+.btn-run:hover:not(:disabled){background:var(--navy2)}.btn-run:disabled{background:#bbb;cursor:not-allowed}
+.progress{margin-top:12px;display:none}
+.prog-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;background:var(--blue-l);border-radius:3px;transition:width .3s}
+.prog-text{text-align:center;font-size:12px;color:var(--muted);margin-top:5px}
+#report{margin-top:20px}
+.dl-bar{background:#fff;border-radius:10px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 6px rgba(0,0,0,.07);margin-bottom:16px;gap:12px}
+.dl-bar p{font-size:13px;color:var(--muted)}
+.btn-dl{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.btn-dl:hover{background:var(--blue-l)}
+</style>
+</head>
+<body>
+<div class="app-header">
+  <div class="logo">📋</div>
+  <div><h1>财务主表自动检查系统</h1><p>v1.0 &nbsp;·&nbsp; 17条规则 &nbsp;·&nbsp; 利润总表 / 营业收支 / 各项费用 / 序时账 / 总部费用</p></div>
+</div>
+<div class="main">
+  <div class="notice">⚠️ <strong>使用前必须先去除 Excel 密码：</strong>在电脑上打开主表 → 文件 → 信息 → 保护工作簿 → 用密码进行加密 → 清空密码 → 保存。<br>浏览器无法读取加密文件，数据不会离开本地。</div>
+  <div class="card">
+    <h3>① 上传主表 Excel（必须）</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px">文件名须含项目名称与日期范围，如：总-英利项目股东可分配利润表202501-202503.xlsx</p>
+    <div class="upload-zone" id="dropMain"><input type="file" id="mainInput" accept=".xlsx,.xls"><div class="uicon">📊</div><p>点击或拖入主表文件（仅限 1 个）</p></div>
+    <div id="mainFileTag"></div>
+  </div>
+  <div class="card">
+    <h3>② 上传附件文件（可选，用于规则11 BOOKING佣金核验）</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px">文件名须含"附件1""附件2""附件3"字样；不上传则跳过该项核验</p>
+    <div class="upload-zone" id="dropAtt"><input type="file" id="attInput" accept=".xlsx,.xls" multiple><div class="uicon">📂</div><p>点击或拖入附件文件（可多选）</p></div>
+    <div id="attFileTags"></div>
+  </div>
+  <button class="btn-run" id="btnRun" disabled>开始检查</button>
+  <div class="progress" id="progress"><div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div><div class="prog-text" id="progText">准备中…</div></div>
+  <div id="report"></div>
+  <div style="height:60px"></div>
+</div>
+<script>
+'use strict';
+
+// ═══ 配置（镜像 config.py）═══
+const T_MAP={英利:65,联合国际:39,世茂:102,百扬:46,光控:83,盈嘉:112,未来中心:38};
+const REQ_SHEETS=['利润总表','股东分红金额','营业收入','营业成本','管理费用','销售费用','税金及附加','财务费用','营业外收支',['原始数据','数据源'],'序时账','总部费用明细',['平均间夜数据','单间夜费用'],'早餐统计'];
+const CHANNELS={4:'携程',5:'美团',6:'飞猪',7:'抖音',8:'直销'};
+const INCOME_PFX=['主营业务收入','营业外收入'];
+const EXPENSE_PFX=['财务费用','管理费用','其他业务成本','税金及附加','所得税','销售费用','主营业务成本','营业外支出'];
+const EMP_CATS={'员工工资':'平均工资','五险一金':'平均五险一金','福利费用':'平均福利费用'};
+const TOL=0.01;
+
+// ═══ 工具函数 ═══
+function toNum(v){if(v===null||v===undefined||v==='')return NaN;if(typeof v==='boolean')return NaN;return Number(String(v).replace(/,/g,'').trim());}
+function cmp(a,b,tol=TOL){const fa=parseFloat(a),fb=parseFloat(b);if(isNaN(fa)&&isNaN(fb))return true;if(isNaN(fa)||isNaN(fb))return false;return Math.abs(fa-fb)<=tol;}
+function fmtN(v,isPct=false){if(v===null||v===undefined)return '空值';const n=parseFloat(v);if(isNaN(n))return String(v);if(isPct)return(n*100).toFixed(2)+'%';if(Math.abs(n)<0.01&&n!==0)return n.toExponential(2);return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function CL(c){return String.fromCharCode(64+c);}
+function pad2(n){return String(n).padStart(2,'0');}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function extractDateRange(fn){const m=fn.match(/(\d{6})-(\d{6})/);return m?[m[1],m[2]]:null;}
+function getTValue(fn){for(const[k,v]of Object.entries(T_MAP))if(fn.includes(k))return v;return null;}
+
+function daysInMonth(v){
+  let y=null,m=null;
+  if(typeof v==='number'&&v>0){try{const d=XLSX.SSF.parse_date_code(v);if(d&&d.y>=1900){y=d.y;m=d.m;}}catch(e){}}
+  if(!y){const s=String(v||'');const r=s.match(/(\d{4})[\/\-](\d{1,2})/);if(r){y=parseInt(r[1]);m=parseInt(r[2]);}}
+  if(!y||!m)return 30;
+  const days=[31,28,31,30,31,30,31,31,30,31,30,31];
+  if(m===2&&((y%4===0&&y%100!==0)||y%400===0))return 29;
+  return days[m-1]||30;
+}
+function fmtDate(v){
+  if(v===null||v===undefined)return '未知';
+  if(typeof v==='number'&&v>0){try{const d=XLSX.SSF.parse_date_code(v);if(d&&d.y>=1900)return d.y+'年'+d.m+'月';}catch(e){}}
+  const s=String(v);let r=s.match(/(\d{4})[\/\-](\d{1,2})/);if(r)return r[1]+'年'+parseInt(r[2])+'月';
+  r=s.match(/(\d{4})年(\d{1,2})月/);if(r)return r[1]+'年'+parseInt(r[2])+'月';return s;
+}
+
+// ═══ SheetJS 辅助 ═══
+function getSheet(wb,kw){for(const n of wb.SheetNames)if(n.includes(kw))return{ws:wb.Sheets[n],name:n};return null;}
+function getCell(ws,row,col){
+  const r=row-1,c=col-1;
+  for(const mg of(ws['!merges']||[])){if(r>=mg.s.r&&r<=mg.e.r&&c>=mg.s.c&&c<=mg.e.c){const a=XLSX.utils.encode_cell({r:mg.s.r,c:mg.s.c});return ws[a]?ws[a].v:null;}}
+  const a=XLSX.utils.encode_cell({r,c});return ws[a]?ws[a].v:null;
+}
+function maxRow(ws){if(!ws['!ref'])return 0;return XLSX.utils.decode_range(ws['!ref']).e.r+1;}
+function sumRange(ws,sr,er,col){let t=0;for(let r=sr;r<=er;r++){const v=toNum(getCell(ws,r,col));if(!isNaN(v)&&Math.abs(v)<1e10)t+=v;}return t;}
+
+// findTotalRow — 完整镜像 Python find_total_row
+function findTotalRow(ws){
+  const mr=maxRow(ws);
+  const V=['合计','合  计','合 计','总计','小计'];
+  const ok=s=>/^[合计总小\s　]+$/.test(s);
+  const isT=raw=>{if(!raw)return false;const s=String(raw).trim();const ns=s.replace(/[\s　]/g,'');return V.includes(s)||(['合计','总计','小计'].includes(ns)&&ok(s));};
+  for(let r=Math.min(mr,100);r>=3;r--){if(isT(getCell(ws,r,2)))return r;if(isT(getCell(ws,r,3)))return r;}
+  for(let r=4;r<=Math.min(mr,100);r++){if(isT(getCell(ws,r,2)))return r;if(isT(getCell(ws,r,3)))return r;}
+  return null;
+}
+// findRowWithText — 镜像 Python find_row_with_text
+function findRowWithText(ws,col,text){
+  const mr=maxRow(ws);
+  for(let r=1;r<=mr;r++){const v=String(getCell(ws,r,col)||'').trim();if(v.includes(text))return r;}
+  for(const ac of[1,3]){if(ac===col)continue;for(let r=1;r<=mr;r++){const v=String(getCell(ws,r,ac)||'').trim();if(v.includes(text))return r;}}
+  return null;
+}
+
+// ═══ 规则1：工作表完整性 ═══
+function rule1(wb,fn){
+  const res={rule:'规则1-工作表检查',passed:true,message:'',details:{}};
+  let req=[...REQ_SHEETS];
+  if(fn&&fn.includes('盈嘉'))req.push('租赁合同台账');
+  const miss=[],extra=[];
+  for(const r of req){const f=Array.isArray(r)?r.some(o=>wb.SheetNames.some(s=>s.includes(o))):wb.SheetNames.some(s=>s.includes(r));if(!f)miss.push(Array.isArray(r)?r[0]+'或'+r[1]:r);}
+  for(const a of wb.SheetNames){const ok=req.some(r=>Array.isArray(r)?r.some(o=>a.includes(o)):a.includes(r));if(!ok)extra.push(a);}
+  if(miss.length||extra.length){res.passed=false;res.message='工作表不完整。缺少: ['+miss.join(', ')+']，额外: ['+extra.join(', ')+']';res.details={'缺少的工作表':miss,'额外的工作表':extra,'现有工作表':wb.SheetNames};}
+  else res.message='工作表齐全，共'+req.length+'个';
+  return res;
+}
+
+// ═══ 规则2：利润总表计算 ═══
+function rule2(wb,tVal){
+  const res={rule:'规则2-利润总表计算',passed:true,message:'',details:{}};
+  if(tVal===null){res.passed=false;res.message='未能从文件名识别项目T值';return res;}
+  const sh=getSheet(wb,'利润总表');if(!sh){res.passed=false;res.message='未找到利润总表';return res;}
+  const ws=sh.ws,errs=[];
+  for(const col of[3,4,5]){
+    const cl=CL(col);
+    const v5=toNum(getCell(ws,5,col));if(!cmp(tVal,v5))errs.push(cl+'5应为'+tVal+'，实际为'+v5);
+    const days=daysInMonth(getCell(ws,3,col));
+    const v6=toNum(getCell(ws,6,col)),e6=tVal*days;if(!cmp(e6,v6))errs.push(cl+'6应为'+e6+'，实际为'+fmtN(v6));
+    const v7=toNum(getCell(ws,7,col)),v8=toNum(getCell(ws,8,col));
+    if(!isNaN(v7)&&!isNaN(v8)&&!isNaN(v6)){const e7=v6-v8;if(!cmp(e7,v7))errs.push(cl+'7计算错误: 期望'+e7.toFixed(2)+'，实际'+fmtN(v7));}
+    const v9=toNum(getCell(ws,9,col));
+    if(!isNaN(v8)&&!isNaN(v9)&&!isNaN(v6)){const e8=v9*v6;if(!cmp(e8,v8))errs.push(cl+'8计算错误: 期望'+e8.toFixed(2)+'，实际'+fmtN(v8));}
+    const v13=toNum(getCell(ws,13,col));
+    const v10=toNum(getCell(ws,10,col));if(!isNaN(v10)&&!isNaN(v13)&&!isNaN(v8)&&v8!==0){const e10=v13/v8;if(!cmp(e10,v10))errs.push(cl+'10计算错误: 期望'+e10.toFixed(2)+'，实际'+fmtN(v10));}
+    const v11=toNum(getCell(ws,11,col));if(!isNaN(v11)&&!isNaN(v13)&&!isNaN(v6)&&v6!==0){const e11=v13/v6;if(!cmp(e11,v11))errs.push(cl+'11计算错误: 期望'+e11.toFixed(2)+'，实际'+fmtN(v11));}
+    const v19=toNum(getCell(ws,19,col)),s1418=sumRange(ws,14,18,col);
+    if(!isNaN(v19)&&!isNaN(v13)){const e19=v13-s1418;if(!cmp(e19,v19))errs.push(cl+'19计算错误: 期望'+e19.toFixed(2)+'，实际'+fmtN(v19));}
+    const v20=toNum(getCell(ws,20,col)),v21=toNum(getCell(ws,21,col)),v22=toNum(getCell(ws,22,col));
+    if(!isNaN(v22)&&!isNaN(v19)){const e22=v19+(isNaN(v20)?0:v20)-(isNaN(v21)?0:v21);if(!cmp(e22,v22))errs.push(cl+'22计算错误: 期望'+e22.toFixed(2)+'，实际'+fmtN(v22));}
+    const v23=toNum(getCell(ws,23,col)),v24=toNum(getCell(ws,24,col));
+    if(!isNaN(v24)&&!isNaN(v22)){const e24=v22-(isNaN(v23)?0:v23);if(!cmp(e24,v24))errs.push(cl+'24计算错误: 期望'+e24.toFixed(2)+'，实际'+fmtN(v24));}
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='所有计算正确';
+  return res;
+}
+
+// ═══ 规则3：利润总表特定输出 ═══
+function rule3(wb){
+  const res={rule:'规则3-特定输出',passed:true,message:'',details:{}};
+  const ps=getSheet(wb,'利润总表'),ss=getSheet(wb,'销售费用');
+  if(!ps||!ss){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const pw=ps.ws,sw=ss.ws,out=[];
+  for(const col of[3,4,5]){
+    const d=fmtDate(getCell(pw,3,col)),v9=toNum(getCell(pw,9,col)),v13=toNum(getCell(pw,13,col));
+    const sSum=sumRange(sw,4,8,col+1),diff=(isNaN(v13)?0:v13)-sSum;
+    out.push(d+'：'+fmtN(v9,true)+'，'+fmtN(diff));
+  }
+  res.message='输出生成成功';res.details['输出内容']=out;return res;
+}
+
+// ═══ 规则4：人员编制 ═══
+function rule4(wb){
+  const res={rule:'规则4-人员编制',passed:true,message:'',details:{}};
+  const sh=getSheet(wb,'利润总表');if(!sh){res.passed=false;res.message='未找到利润总表';return res;}
+  const ws=sh.ws;
+  let txt=null,pos=null;
+  const b30=String(getCell(ws,30,2)||''),b29=String(getCell(ws,29,2)||'');
+  if(b30.includes('人员编制')){txt=b30;pos='B30';}else if(b29.includes('人员编制')){txt=b29;pos='B29';}
+  else{res.passed=false;res.message='B29和B30单元格都未找到人员编制信息';return res;}
+  const m1=txt.match(/人员编制为(\d+)人/);
+  if(!m1){res.passed=false;res.message='未找到人员编制信息';return res;}
+  const total=parseInt(m1[1]);
+  const rem=txt.slice(txt.indexOf(m1[0])+m1[0].length).replace(/\d+[日号]/g,'');
+  const nums=rem.match(/\d+/g)||[];
+  const sumN=nums.reduce((a,n)=>a+parseInt(n),0);
+  if(total===sumN)res.message='人员编制核对正确: 总计'+total+'人（位置：'+pos+'）';
+  else{res.passed=false;res.message='人员编制不符: 总计应为'+total+'人，实际合计'+sumN+'人（位置：'+pos+'）';}
+  return res;
+}
+
+// ═══ 规则5：股东分红 ═══
+function rule5(wb){
+  const res={rule:'规则5-股东分红',passed:true,message:'',details:{}};
+  const ps=getSheet(wb,'利润总表'),ds=getSheet(wb,'股东分红金额');
+  if(!ps||!ds){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const pw=ps.ws,dw=ds.ws,errs=[];
+  let s24=0;for(const c of[3,4,5]){const v=toNum(getCell(pw,24,c));if(!isNaN(v))s24+=v;}
+  const c5=toNum(getCell(dw,5,3));
+  if(!cmp(s24,c5))errs.push('C5应为'+s24.toFixed(2)+'，实际为'+c5);
+  let row=5;
+  while(row<=200){
+    let pct=getCell(dw,row,5);if(pct===null||pct===undefined||pct==='')break;
+    const amt=toNum(getCell(dw,row,6));
+    if(typeof pct==='string'&&pct.includes('%'))pct=parseFloat(pct.replace('%',''))/100;
+    pct=toNum(pct);
+    const exp=(isNaN(c5)?0:c5)*(isNaN(pct)?0:pct);
+    if(!cmp(exp,amt,row===5?0.02:TOL))errs.push('第'+row+'行: 期望'+exp.toFixed(2)+'，实际'+amt);
+    row++;
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='股东分红计算正确';
+  return res;
+}
+
+// ═══ 规则6：股东分红表下方不能有内容 ═══
+function rule6(wb){
+  const res={rule:'规则6-额外内容检查',passed:true,message:'',details:{}};
+  const sh=getSheet(wb,'股东分红金额');if(!sh){res.passed=false;res.message='未找到股东分红金额表';return res;}
+  const ws=sh.ws,mr=maxRow(ws);
+  let last=4;
+  for(let r=5;r<=Math.min(mr,200);r++){const v=getCell(ws,r,3);if(v!==null&&v!==undefined&&String(v).trim()!=='')last=r;else break;}
+  const extra=[];let first=null;
+  for(let r=last+1;r<=Math.min(mr,last+100);r++){
+    const v=getCell(ws,r,3);
+    if(v!==null&&v!==undefined&&String(v).trim()!==''){
+      if(!first)first=r;
+      const cols=[];for(let c=1;c<=10;c++){const cv=getCell(ws,r,c);if(cv!==null&&cv!==undefined&&String(cv).trim()!=='')cols.push(CL(c)+'列: '+String(cv).slice(0,100));}
+      if(cols.length)extra.push('第'+r+'行 - '+cols.join(', '));
+    }
+  }
+  if(first){res.passed=false;res.message='股东分红金额表下方存在其他内容（从第'+first+'行开始）';res.details['额外内容']=extra.slice(0,30);if(extra.length>30)res.details['额外内容'].push('...还有'+(extra.length-30)+'行其他内容');}
+  else res.message='股东分红金额表下方无其他内容';
+  return res;
+}
+
+// ═══ 规则7：营业收入 ═══
+function rule7(wb){
+  const res={rule:'规则7-营业收入',passed:true,message:'',details:{}};
+  const rs=getSheet(wb,'营业收入'),ps=getSheet(wb,'利润总表');
+  if(!rs||!ps){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const rw=rs.ws,pw=ps.ws,errs=[];
+  for(const col of[4,5,6]){const s=sumRange(rw,4,8,col),v9=toNum(getCell(rw,9,col));if(!cmp(s,v9))errs.push(CL(col)+'9应为'+s.toFixed(2)+'，实际为'+v9);}
+  let rSum=0,pSum=0;
+  for(const c of[4,5,6]){const v=toNum(getCell(rw,9,c));if(!isNaN(v))rSum+=v;}
+  for(const c of[3,4,5]){const v=toNum(getCell(pw,13,c));if(!isNaN(v))pSum+=v;}
+  if(!cmp(rSum,pSum))errs.push('营业收入总和'+rSum.toFixed(2)+'与利润总表'+pSum.toFixed(2)+'不符');
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='营业收入计算正确';
+  return res;
+}
+
+// ═══ 规则8：渠道占比（信息输出） ═══
+function rule8(wb){
+  const res={rule:'规则8-渠道占比',passed:true,message:'',details:{}};
+  const sh=getSheet(wb,'营业收入');if(!sh){res.passed=false;res.message='未找到营业收入表';return res;}
+  const ws=sh.ws;
+  let tot=0;for(const c of[4,5,6]){const v=toNum(getCell(ws,9,c));if(!isNaN(v))tot+=v;}
+  const out=[];
+  for(const[rs,nm]of Object.entries(CHANNELS)){let s=0;for(const c of[4,5,6]){const v=toNum(getCell(ws,parseInt(rs),c));if(!isNaN(v))s+=v;}out.push(nm+'渠道占比：'+(tot>0?(s/tot*100).toFixed(2):'0.00')+'%');}
+  res.message='渠道占比计算完成';res.details['占比结果']=out;return res;
+}
+
+// ═══ 规则9：营业成本 ═══
+function rule9(wb){
+  const res={rule:'规则9-营业成本',passed:true,message:'',details:{}};
+  const cs=getSheet(wb,'营业成本'),ps=getSheet(wb,'利润总表');
+  if(!cs||!ps){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const cw=cs.ws,pw=ps.ws;
+  const tr=findTotalRow(cw);if(!tr){res.passed=false;res.message='未找到合计行';return res;}
+  const errs=[],calc=[];
+  for(const col of[4,5,6]){const s=sumRange(cw,4,tr-1,col),tv=toNum(getCell(cw,tr,col));if(!cmp(s,tv))errs.push(CL(col)+tr+'合计错误: 期望'+s.toFixed(2)+'，实际'+fmtN(tv));}
+  let cTot=0,pTot=0;
+  for(const c of[4,5,6]){const v=toNum(getCell(cw,tr,c));if(!isNaN(v))cTot+=v;}
+  for(const c of[3,4,5]){const v=toNum(getCell(pw,14,c));if(!isNaN(v))pTot+=v;}
+  if(!cmp(cTot,pTot))errs.push('营业成本总计'+cTot.toFixed(2)+'与利润总表'+pTot.toFixed(2)+'不符');
+  let emp=1;
+  for(const row of[30,29]){const v=String(getCell(pw,row,2)||'');if(v.includes('人员编制')){const m=v.match(/人员编制为(\d+)人/);if(m){emp=parseInt(m[1]);break;}}}
+  for(const[kw,nm]of Object.entries(EMP_CATS)){for(let r=4;r<tr;r++){const cv=String(getCell(cw,r,3)||'');if(cv.includes(kw)){let t=0,cnt=0;for(const c of[4,5,6]){const v=toNum(getCell(cw,r,c));if(!isNaN(v)){t+=v;cnt++;}}if(cnt>0)calc.push(nm+'：'+(t/cnt/emp).toFixed(2)+'元');break;}}}
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details={'错误列表':errs,'计算结果':calc};}else{res.message='营业成本计算正确';res.details['计算结果']=calc;}
+  return res;
+}
+
+// ═══ 通用费用核对（规则10/12/13） ═══
+function ruleExpense(wb,kw,profRow,name){
+  const res={rule:name,passed:true,message:'',details:{}};
+  const es=getSheet(wb,kw),ps=getSheet(wb,'利润总表');
+  if(!es||!ps){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const ew=es.ws,pw=ps.ws;
+  const tr=findTotalRow(ew);if(!tr){res.passed=false;res.message='未找到合计行';return res;}
+  const errs=[];
+  for(const col of[4,5,6]){const s=sumRange(ew,4,tr-1,col),tv=toNum(getCell(ew,tr,col));if(!isNaN(tv)&&!cmp(s,tv))errs.push(CL(col)+tr+'合计错误: 期望'+s.toFixed(2)+'，实际'+fmtN(tv));}
+  let eTot=0,pTot=0;
+  for(const c of[4,5,6]){const v=toNum(getCell(ew,tr,c));if(!isNaN(v))eTot+=v;}
+  for(const c of[3,4,5]){const v=toNum(getCell(pw,profRow,c));if(!isNaN(v))pTot+=v;}
+  if(!cmp(eTot,pTot))errs.push(kw+'总计'+eTot.toFixed(2)+'与利润总表'+pTot.toFixed(2)+'不符');
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message=kw+'计算正确';
+  return res;
+}
+const rule10=wb=>ruleExpense(wb,'管理费用',17,'规则10-管理费用');
+const rule12=wb=>ruleExpense(wb,'税金及附加',15,'规则12-税金及附加');
+const rule13=wb=>ruleExpense(wb,'财务费用',18,'规则13-财务费用');
+
+// ═══ 规则11：销售费用 + 佣金率 + BOOKING附件 ═══
+function rule11(wb,attWbs){
+  const res={rule:'规则11-销售费用和佣金率',passed:true,message:'',details:{}};
+  const ss=getSheet(wb,'销售费用'),ps=getSheet(wb,'利润总表'),rs=getSheet(wb,'营业收入');
+  if(!ss||!ps||!rs){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const sw=ss.ws,pw=ps.ws,rw=rs.ws;
+  const tr=findTotalRow(sw);if(!tr){res.passed=false;res.message='未找到合计行';return res;}
+  const errs=[],calc=[];
+  for(const col of[4,5,6]){const s=sumRange(sw,4,tr-1,col),tv=toNum(getCell(sw,tr,col));if(!cmp(s,tv))errs.push(CL(col)+tr+'合计错误: 期望'+s.toFixed(2)+'，实际'+fmtN(tv));}
+  let sTot=0,pTot=0;
+  for(const c of[4,5,6]){const v=toNum(getCell(sw,tr,c));if(!isNaN(v))sTot+=v;}
+  for(const c of[3,4,5]){const v=toNum(getCell(pw,16,c));if(!isNaN(v))pTot+=v;}
+  if(!cmp(sTot,pTot))errs.push('销售费用总计'+sTot.toFixed(2)+'与利润总表'+pTot.toFixed(2)+'不符');
+  for(const[row,nm]of[[4,'携程'],[5,'美团'],[6,'飞猪'],[7,'抖音']]){
+    let sS=0,rS=0;for(const c of[4,5,6]){const sv=toNum(getCell(sw,row,c));if(!isNaN(sv))sS+=sv;const rv=toNum(getCell(rw,row,c));if(!isNaN(rv))rS+=rv;}
+    calc.push(nm+'佣金率：'+(rS>0?(sS/rS*100).toFixed(2):'0.00')+'%');
+  }
+  if(attWbs&&attWbs.length>0){
+    for(let i=0;i<attWbs.length;i++){
+      const aw=attWbs[i];if(!aw){errs.push('附件'+(i+1)+'读取失败，已跳过');continue;}
+      const an=aw.SheetNames.find(s=>s.includes('直销、升级、延时房费汇总'));
+      if(!an){errs.push('附件'+(i+1)+'中未找到"直销、升级、延时房费汇总"工作表');continue;}
+      const aws=aw.Sheets[an],mr2=maxRow(aws);
+      let bkSum=0;
+      for(let r=1;r<=mr2;r++){const e=String(getCell(aws,r,5)||'');if(e.toUpperCase().includes('BOOKING')){const g=toNum(getCell(aws,r,7));if(!isNaN(g))bkSum+=g;}}
+      const scol=4+i,sv=toNum(getCell(sw,8,scol));
+      if(bkSum>0&&!isNaN(sv)){const ratio=sv/bkSum;if(ratio>=0.149&&ratio<=0.151)calc.push('附件'+(i+1)+'检查通过: BOOKING佣金比例'+ratio.toFixed(3));else errs.push('附件'+(i+1)+' BOOKING佣金比例不在0.149-0.151范围: '+ratio.toFixed(3));}
+      else calc.push('附件'+(i+1)+': BOOKING金额'+bkSum.toFixed(2)+'，未计算比例');
+    }
+  }else calc.push('附件未上传，已跳过BOOKING佣金核验');
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details={'错误列表':errs,'佣金率':calc};}else{res.message='销售费用计算正确';res.details['佣金率']=calc;}
+  return res;
+}
+
+// ═══ 规则14：营业外收支 ═══
+function rule14(wb){
+  const res={rule:'规则14-营业外收支',passed:true,message:'',details:{}};
+  const ns=getSheet(wb,'营业外收支'),ps=getSheet(wb,'利润总表');
+  if(!ns||!ps){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const nw=ns.ws,pw=ps.ws,errs=[];
+  const ir=findRowWithText(nw,2,'营业外收入明细'),er=findRowWithText(nw,2,'营业外支出明细');
+  if(ir){
+    for(const col of[4,5,6]){let s=0;for(const off of[2,3,4]){const v=toNum(getCell(nw,ir+off,col));if(!isNaN(v))s+=v;}const tv=toNum(getCell(nw,ir+5,col));if(!cmp(s,tv))errs.push('营业外收入'+CL(col)+'列合计错误');}
+    let iT=0,pI=0;for(const c of[4,5,6]){const v=toNum(getCell(nw,ir+5,c));if(!isNaN(v))iT+=v;}for(const c of[3,4,5]){const v=toNum(getCell(pw,20,c));if(!isNaN(v))pI+=v;}
+    if(!cmp(iT,pI))errs.push('营业外收入总计与利润总表不符');
+  }
+  if(er){
+    for(const col of[4,5,6]){let s=0;for(const off of[2,3]){const v=toNum(getCell(nw,er+off,col));if(!isNaN(v))s+=v;}const tv=toNum(getCell(nw,er+4,col));if(!cmp(s,tv))errs.push('营业外支出'+CL(col)+'列合计错误');}
+    let eT=0,pE=0;for(const c of[4,5,6]){const v=toNum(getCell(nw,er+4,c));if(!isNaN(v))eT+=v;}for(const c of[3,4,5]){const v=toNum(getCell(pw,21,c));if(!isNaN(v))pE+=v;}
+    if(!cmp(eT,pE))errs.push('营业外支出总计与利润总表不符');
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='营业外收支计算正确';
+  return res;
+}
+
+// ═══ 规则15：序时账 ═══
+function rule15(wb,dr){
+  const res={rule:'规则15-序时账',passed:true,message:'',details:{}};
+  const js=getSheet(wb,'序时账'),ps=getSheet(wb,'利润总表');
+  if(!js||!ps){res.passed=false;res.message='未找到必要的工作表';return res;}
+  const jw=js.ws,pw=ps.ws,mr=maxRow(jw),errs=[];
+  let iSum=0,eSum=0;
+  for(let r=2;r<=mr;r++){const d=String(getCell(jw,r,4)||''),f=toNum(getCell(jw,r,6));if(d){for(const p of INCOME_PFX){if(d.startsWith(p)){if(!isNaN(f))iSum+=f;break;}}for(const p of EXPENSE_PFX){if(d.startsWith(p)){if(!isNaN(f))eSum+=f;break;}}}}
+  let pI=0,pE=0;
+  for(const row of[13,20]){for(const c of[3,4,5]){const v=toNum(getCell(pw,row,c));if(!isNaN(v))pI+=v;}}
+  for(const row of[14,15,16,17,18,21,23]){for(const c of[3,4,5]){const v=toNum(getCell(pw,row,c));if(!isNaN(v))pE+=v;}}
+  if(!cmp(iSum,pI))errs.push('收入合计'+iSum.toFixed(2)+'与利润总表'+pI.toFixed(2)+'不符');
+  if(!cmp(eSum,pE))errs.push('支出合计'+eSum.toFixed(2)+'与利润总表'+pE.toFixed(2)+'不符');
+  if(dr){
+    const[s,e]=dr;const sy=parseInt(s.slice(0,4)),sm=parseInt(s.slice(4,6)),ey=parseInt(e.slice(0,4)),em=parseInt(e.slice(4,6));
+    const dErrs=[];
+    for(let r=2;r<=Math.min(mr,2000);r++){
+      const bv=getCell(jw,r,2);if(bv===null||bv===undefined)continue;
+      let y=null,mo=null;
+      if(typeof bv==='number'&&bv>0){try{const d=XLSX.SSF.parse_date_code(bv);if(d&&d.y>=1900){y=d.y;mo=d.m;}}catch(ex){}}
+      if(!y){const mm=String(bv).match(/^(\d{4})[\/\-](\d{1,2})/);if(mm){y=parseInt(mm[1]);mo=parseInt(mm[2]);}}
+      if(!y){dErrs.push('行'+r+': 日期格式错误 '+bv);continue;}
+      const out=y<sy||y>ey||(y===sy&&mo<sm)||(y===ey&&mo>em);
+      if(out)dErrs.push('行'+r+': 日期'+bv+'超出范围');
+    }
+    if(dErrs.length){errs.push(...dErrs.slice(0,5));if(dErrs.length>5)errs.push('...还有'+(dErrs.length-5)+'个日期错误');}
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='序时账核对正确';
+  return res;
+}
+
+// ═══ 规则16：总部费用分配 ═══
+function rule16(wb){
+  const res={rule:'规则16-总部费用分配',passed:true,message:'',details:{}};
+  const sh=getSheet(wb,'总部费用明细');if(!sh){res.passed=false;res.message='未找到总部费用明细表';return res;}
+  const ws=sh.ws,mr=maxRow(ws),errs=[];
+  for(const[ci,cl]of[[9,'I'],[10,'J'],[11,'K']]){
+    const kw=getCell(ws,5,ci);if(!kw)continue;
+    let mSum=0;for(let r=1;r<=mr;r++){const bv=String(getCell(ws,r,2)||'');if(bv.trim()===String(kw).trim()){const ev=toNum(getCell(ws,r,5));if(!isNaN(ev))mSum+=ev;}}
+    const cSum=sumRange(ws,6,12,ci),exp=mSum*1.15;
+    if(!cmp(exp,cSum))errs.push(cl+'列: E列匹配和'+mSum.toFixed(2)+'×1.15='+exp.toFixed(2)+'，实际'+cl+'6-12行和为'+cSum.toFixed(2));
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='总部费用分配计算正确';
+  return res;
+}
+
+// ═══ 规则17：总部费用比例 ═══
+function rule17(wb){
+  const res={rule:'规则17-总部费用比例',passed:true,message:'',details:{}};
+  const sh=getSheet(wb,'总部费用明细');if(!sh){res.passed=false;res.message='未找到总部费用明细表';return res;}
+  const ws=sh.ws,errs=[];
+  const hSum=sumRange(ws,6,12,8);if(hSum===0){res.passed=false;res.message='H列第6-12行和为0，无法计算比例';return res;}
+  for(const[ci,cl]of[[9,'I'],[10,'J'],[11,'K']]){
+    const cSum=sumRange(ws,6,12,ci);
+    for(let row=6;row<=12;row++){const hv=toNum(getCell(ws,row,8)),cv=toNum(getCell(ws,row,ci));if(!isNaN(hv)&&!isNaN(cv)){const exp=cSum/hSum*hv;if(!cmp(exp,cv))errs.push(cl+row+': 期望'+exp.toFixed(2)+'，实际'+fmtN(cv));}}
+  }
+  if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='总部费用比例分配正确';
+  return res;
+}
+
+// ═══ 报告 HTML（镜像原 html_generator.py） ═══
+const RCSS=`body{font-family:'Microsoft YaHei',Arial,sans-serif;margin:20px;background-color:#f5f5f5}.header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:20px;border-radius:10px;margin-bottom:20px}.header h1{font-size:22px;margin-bottom:8px}.header p{margin:4px 0;font-size:14px}.summary{display:flex;justify-content:space-around;margin:20px 0;flex-wrap:wrap;gap:10px}.summary-item{background:white;padding:15px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1);text-align:center;flex:1;min-width:120px}.summary-number{font-size:24px;font-weight:bold;margin:10px 0}.passed{color:#28a745}.failed{color:#dc3545}.total{color:#007bff}.section{background:white;padding:20px;margin:20px 0;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}.section-header{font-size:18px;font-weight:bold;margin-bottom:15px;padding:10px;background:#f8f9fa;border-radius:5px;cursor:pointer;user-select:none}.collapsible{max-height:0;overflow:hidden;transition:max-height .3s ease-out}.collapsible.active{max-height:99999px;transition:max-height .5s ease-in}.check-item{margin:10px 0;padding:10px;border-left:4px solid;background:#fafafa}.check-passed{border-left-color:#28a745}.check-failed{border-left-color:#dc3545}.check-title{font-weight:bold;margin-bottom:5px}.check-message{color:#666;margin:5px 0}.check-details{margin-top:10px;padding:10px;background:white;border-radius:5px;font-size:14px}.error-list{list-style-type:none;padding:0}.error-list li{padding:5px 0;border-bottom:1px dashed #ddd}.error-list li:last-child{border-bottom:none}.arrow{float:right;transition:transform .3s}.arrow.active{transform:rotate(180deg)}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:8px;text-align:left;border:1px solid #ddd}th{background:#f8f9fa}`;
+
+function mkItem(c,ok){
+  let h='<div class="check-item '+(ok?'check-passed':'check-failed')+'">';
+  h+='<div class="check-title">'+esc(c.rule)+'</div>';
+  h+='<div class="check-message">'+(ok?'✅':'❌')+' '+esc(c.message)+'</div>';
+  if(c.details&&Object.keys(c.details).length){
+    h+='<div class="check-details">';
+    for(const[k,v]of Object.entries(c.details)){
+      if(Array.isArray(v)){h+='<strong>'+esc(k)+'：</strong>';if(!ok){h+='<ul class="error-list">';for(const i of v)h+='<li>'+esc(String(i))+'</li>';h+='</ul>';}else{h+='<br>';for(const i of v)h+='• '+esc(String(i))+'<br>';}}
+      else if(typeof v==='object'&&v!==null){h+='<strong>'+esc(k)+'：</strong><table>';for(const[kk,vv]of Object.entries(v))h+='<tr><td>'+esc(String(kk))+'</td><td>'+esc(Array.isArray(vv)?vv.join(', '):String(vv))+'</td></tr>';h+='</table>';}
+      else h+='<strong>'+esc(k)+'：</strong>'+esc(String(v))+'<br>';
+    }
+    h+='</div>';
+  }
+  return h+'</div>';
+}
+
+function buildReport(results,fn,tv,dr,forDl=false){
+  const now=new Date();
+  const ts=now.getFullYear()+'-'+pad2(now.getMonth()+1)+'-'+pad2(now.getDate())+' '+pad2(now.getHours())+':'+pad2(now.getMinutes())+':'+pad2(now.getSeconds());
+  const ok=results.filter(r=>r.passed),fail=results.filter(r=>!r.passed);
+  const rate=results.length?(ok.length/results.length*100).toFixed(1):'0.0';
+  const ds=dr?dr[0]+' - '+dr[1]:'未知';
+  let body='<div class="header"><h1>财务报表主表自动检查报告</h1><p>检查文件：'+esc(fn||'未知')+'</p><p>项目T值：'+(tv||'未知')+'</p><p>日期范围：'+esc(ds)+'</p><p>生成时间：'+ts+'</p></div>';
+  body+='<div class="summary"><div class="summary-item"><div>总检查项</div><div class="summary-number total">'+results.length+'</div></div><div class="summary-item"><div>通过项</div><div class="summary-number passed">'+ok.length+'</div></div><div class="summary-item"><div>失败项</div><div class="summary-number failed">'+fail.length+'</div></div><div class="summary-item"><div>通过率</div><div class="summary-number total">'+rate+'%</div></div></div>';
+  if(fail.length){
+    const grps={};for(const c of fail){const g=c.rule.includes('-')?c.rule.split('-').slice(1).join('-'):'其他';if(!grps[g])grps[g]=[];grps[g].push(c);}
+    body+='<div class="section"><div class="section-header" style="color:#dc3545">❌ 检查未通过项目 ('+fail.length+')</div><div style="padding:10px">';
+    for(const[g,cs]of Object.entries(grps)){body+='<div style="margin:15px 0"><h3 style="color:#495057;border-bottom:2px solid #dee2e6;padding-bottom:5px">📋 '+esc(g)+'</h3>';for(const c of cs)body+=mkItem(c,false);body+='</div>';}
+    body+='</div></div>';
+  }
+  if(ok.length){
+    body+='<div class="section"><div class="section-header" onclick="toggleSection(this)" style="color:#28a745">✅ 检查通过项目 ('+ok.length+') <span class="arrow">▼</span></div><div class="collapsible" id="passed-section">';
+    for(const c of ok)body+=mkItem(c,true);
+    body+='</div></div>';
+  }
+  const sc='<script>function toggleSection(h){const c=h.nextElementSibling;const a=h.querySelector(".arrow");c.classList.toggle("active");a.classList.toggle("active");}<\/script>';
+  if(forDl)return'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>财务报表主表自动检查报告</title><style>'+RCSS+'</style></head><body>'+body+sc+'</body></html>';
+  return{body,sc};
+}
+
+// ═══ UI ═══
+let mainFile=null,attFiles=[];
+
+function setupDrop(zId,iId,cb){
+  const z=document.getElementById(zId),i=document.getElementById(iId);
+  z.addEventListener('dragover',e=>{e.preventDefault();z.classList.add('drag-over');});
+  z.addEventListener('dragleave',()=>z.classList.remove('drag-over'));
+  z.addEventListener('drop',e=>{e.preventDefault();z.classList.remove('drag-over');cb(e.dataTransfer.files);});
+  i.addEventListener('change',()=>{cb(i.files);i.value='';});
+}
+setupDrop('dropMain','mainInput',files=>{for(const f of files){if(f.name.match(/\.xlsx?$/i)){mainFile=f;break;}}renderMain();});
+setupDrop('dropAtt','attInput',files=>{for(const f of files){if(f.name.match(/\.xlsx?$/i)&&!attFiles.find(x=>x.name===f.name))attFiles.push(f);}renderAtt();});
+
+function renderMain(){
+  document.getElementById('mainFileTag').innerHTML=mainFile?'<div class="file-tag"><span>📊</span><span class="fname">'+esc(mainFile.name)+'</span><span class="sz">'+(mainFile.size/1024).toFixed(0)+' KB</span><button class="rm" onclick="mainFile=null;renderMain()">×</button></div>':'';
+  document.getElementById('btnRun').disabled=!mainFile;
+}
+function renderAtt(){document.getElementById('attFileTags').innerHTML=attFiles.map((f,i)=>'<div class="file-tag"><span>📂</span><span class="fname">'+esc(f.name)+'</span><span class="sz">'+(f.size/1024).toFixed(0)+' KB</span><button class="rm" onclick="attFiles.splice('+i+',1);renderAtt()">×</button></div>').join('');}
+function sortAtt(fs){return[...fs].sort((a,b)=>{const g=n=>{const m=n.match(/附件(\d+)/);return m?+m[1]:999;};return g(a.name)-g(b.name);});}
+function setProg(p,t){document.getElementById('progFill').style.width=p+'%';document.getElementById('progText').textContent=t;}
+
+document.getElementById('btnRun').addEventListener('click',async()=>{
+  if(!mainFile)return;
+  const btn=document.getElementById('btnRun'),prog=document.getElementById('progress'),rdiv=document.getElementById('report');
+  btn.disabled=true;prog.style.display='block';rdiv.innerHTML='';setProg(5,'正在读取主表文件…');
+  let wb;
+  try{const buf=await mainFile.arrayBuffer();wb=XLSX.read(buf,{type:'array',raw:true,cellDates:false});}
+  catch(e){rdiv.innerHTML='<div class="card" style="color:#c0392b;padding:20px">❌ 无法读取主表文件：'+esc(e.message)+'<br><br>请确认已去除 Excel 密码后再上传。</div>';btn.disabled=false;prog.style.display='none';return;}
+  setProg(15,'正在读取附件文件…');
+  const sAtt=sortAtt(attFiles),attWbs=[];
+  for(const af of sAtt){try{const buf=await af.arrayBuffer();attWbs.push(XLSX.read(buf,{type:'array',raw:true,cellDates:false}));}catch(e){attWbs.push(null);}}
+  setProg(25,'准备检查参数…');
+  const fn=mainFile.name,tv=getTValue(fn),dr=extractDateRange(fn);
+  const fns=[()=>rule1(wb,fn),()=>rule2(wb,tv),()=>rule3(wb),()=>rule4(wb),()=>rule5(wb),()=>rule6(wb),()=>rule7(wb),()=>rule8(wb),()=>rule9(wb),()=>rule10(wb),()=>rule11(wb,attWbs.filter(Boolean)),()=>rule12(wb),()=>rule13(wb),()=>rule14(wb),()=>rule15(wb,dr),()=>rule16(wb),()=>rule17(wb)];
+  const results=[];
+  for(let i=0;i<fns.length;i++){setProg(25+Math.round((i+1)/fns.length*65),'执行规则 '+(i+1)+' / '+fns.length+'…');await new Promise(r=>setTimeout(r,0));try{results.push(fns[i]());}catch(e){results.push({rule:'规则'+(i+1),passed:false,message:'检查过程中发生错误: '+e.message,details:{}}); }}
+  setProg(100,'检查完成！');
+
+  // 导出按钮
+  const dlBar=document.createElement('div');dlBar.className='dl-bar';
+  dlBar.innerHTML='<p>报告已生成，点击右侧按钮下载独立 HTML 文件</p><button class="btn-dl" id="btnDl">📥 导出报告 HTML</button>';
+  rdiv.appendChild(dlBar);
+
+  // 行内报告
+  const{body,sc}=buildReport(results,fn,tv,dr,false);
+  const styleEl=document.createElement('style');
+  styleEl.textContent=RCSS.replace(/^body\{[^}]+\}/,'');
+  rdiv.appendChild(styleEl);
+  const wrap=document.createElement('div');wrap.innerHTML=body;rdiv.appendChild(wrap);
+  if(!document.getElementById('tsScript')){const s=document.createElement('script');s.id='tsScript';s.textContent='function toggleSection(h){const c=h.nextElementSibling;const a=h.querySelector(".arrow");c.classList.toggle("active");a.classList.toggle("active");}';document.body.appendChild(s);}
+
+  document.getElementById('btnDl').addEventListener('click',()=>{
+    const now=new Date();const ts=now.getFullYear()+pad2(now.getMonth()+1)+pad2(now.getDate())+'_'+pad2(now.getHours())+pad2(now.getMinutes())+pad2(now.getSeconds());
+    const html=buildReport(results,fn,tv,dr,true);
+    const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='财务报表主表自动检查报告_'+ts+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),5000);
+  });
+  btn.disabled=false;setTimeout(()=>{prog.style.display='none';},1200);
+});
+</script>
+</body>
+</html>
