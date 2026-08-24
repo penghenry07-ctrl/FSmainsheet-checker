@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>财务主表自动检查系统</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/excelize-wasm@0.1.3/index.js"></script>
 <style>
 :root{--navy:#0f1e35;--navy2:#162844;--blue:#1a6fbe;--blue-l:#2d8eed;--border:#dde3ea;--text:#1a2535;--muted:#6b7c93}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -43,7 +44,7 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
   <div><h1>财务主表自动检查系统</h1><p>v1.0 &nbsp;·&nbsp; 17条规则 &nbsp;·&nbsp; 利润总表 / 营业收支 / 各项费用 / 序时账 / 总部费用</p></div>
 </div>
 <div class="main">
-  <div class="notice">⚠️ <strong>使用前必须先去除 Excel 密码：</strong>在电脑上打开主表 → 文件 → 信息 → 保护工作簿 → 用密码进行加密 → 清空密码 → 保存。<br>浏览器无法读取加密文件，数据不会离开本地。</div>
+  <div class="notice">🔐 <strong>加密主表可直接上传：</strong>系统会使用预设密码在浏览器内存中临时解密并执行检查，无需先在 WPS 中删除密码。<br>原始 Excel 不会被修改，数据不会离开本地，也不会生成解密文件。</div>
   <div class="card">
     <h3>① 上传主表 Excel（必须）</h3>
     <p style="font-size:12px;color:var(--muted);margin-bottom:10px">文件名须含项目名称与日期范围，如：总-英利项目股东可分配利润表202501-202503.xlsx</p>
@@ -65,13 +66,18 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 'use strict';
 
 // ═══ 配置（镜像 config.py）═══
-const T_MAP={英利:65,联合国际:39,世茂:102,百扬:46,光控:83,盈嘉:112,未来中心:38};
+const T_MAP={英利:65,联合国际:39,世茂:102,百扬:46,光控:82,盈嘉:112,未来中心:38};
 const REQ_SHEETS=['利润总表','股东分红金额','营业收入','营业成本','管理费用','销售费用','税金及附加','财务费用','营业外收支',['原始数据','数据源'],'序时账','总部费用明细',['平均间夜数据','单间夜费用']];
 const CHANNELS={4:'携程',5:'美团',6:'飞猪',7:'抖音',8:'直销'};
 const INCOME_PFX=['主营业务收入','营业外收入'];
 const EXPENSE_PFX=['财务费用','管理费用','其他业务成本','税金及附加','所得税','销售费用','主营业务成本','营业外支出'];
 const EMP_CATS={'员工工资':'平均工资','五险一金':'平均五险一金','福利费用':'平均福利费用'};
 const TOL=0.01;
+const MAIN_WORKBOOK_PASSWORD='SHIYE';
+const EXCELIZE_WASM_URL='https://cdn.jsdelivr.net/npm/excelize-wasm@0.1.3/excelize.wasm.gz';
+const PERSONNEL_ANCHOR='人工成本:每月15日发放上一个月全月工资';
+const PERSONNEL_CACHE=new WeakMap();
+let excelizeReadyPromise=null;
 
 // ═══ 工具函数 ═══
 function toNum(v){if(v===null||v===undefined||v==='')return NaN;if(typeof v==='boolean')return NaN;return Number(String(v).replace(/,/g,'').trim());}
@@ -83,6 +89,7 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 
 function extractDateRange(fn){const m=fn.match(/(\d{6})-(\d{6})/);return m?[m[1],m[2]]:null;}
 function getTValue(fn){for(const[k,v]of Object.entries(T_MAP))if(fn.includes(k))return v;return null;}
+function getProjectName(fn){for(const k of Object.keys(T_MAP))if(fn.includes(k))return k;return null;}
 
 function daysInMonth(v){
   let y=null,m=null;
@@ -109,6 +116,76 @@ function getCell(ws,row,col){
 }
 function maxRow(ws){if(!ws['!ref'])return 0;return XLSX.utils.decode_range(ws['!ref']).e.r+1;}
 function sumRange(ws,sr,er,col){let t=0;for(let r=sr;r<=er;r++){const v=toNum(getCell(ws,r,col));if(!isNaN(v)&&Math.abs(v)<1e10)t+=v;}return t;}
+
+function normalizePersonnelText(v){return String(v===null||v===undefined?'':v).replace(/[\s\u3000]+/g,'').replace(/：/g,':');}
+function getPersonnelInfo(wb){
+  if(PERSONNEL_CACHE.has(wb))return PERSONNEL_CACHE.get(wb);
+  const sh=getSheet(wb,'利润总表');
+  if(!sh){const out={ok:false,error:'未找到利润总表'};PERSONNEL_CACHE.set(wb,out);return out;}
+  const ws=sh.ws,matches=[];
+  if(ws['!ref']){
+    const range=XLSX.utils.decode_range(ws['!ref']);
+    for(let r=range.s.r;r<=range.e.r;r++){
+      for(let c=range.s.c;c<=range.e.c;c++){
+        const address=XLSX.utils.encode_cell({r,c}),cell=ws[address];
+        if(cell&&normalizePersonnelText(cell.v).includes(PERSONNEL_ANCHOR))matches.push({address,text:normalizePersonnelText(cell.v)});
+      }
+    }
+  }
+  let out;
+  if(matches.length===0)out={ok:false,error:'利润总表全表未找到人员编制锚点“人工成本：每月15日发放上一个月全月工资”'};
+  else if(matches.length>1)out={ok:false,error:'利润总表找到多个人员编制锚点单元格：'+matches.map(x=>x.address).join('、')};
+  else{
+    const hit=matches[0],m=hit.text.match(/人员编制为(\d+)人/);
+    if(!m)out={ok:false,error:'锚点单元格'+hit.address+'中未找到“人员编制为X人”'};
+    else{
+      const total=parseInt(m[1],10);
+      const rem=hit.text.slice(hit.text.indexOf(m[0])+m[0].length).replace(/\d+[日号]/g,'');
+      const nums=rem.match(/\d+/g)||[];
+      const sumN=nums.reduce((a,n)=>a+parseInt(n,10),0);
+      out={ok:true,address:hit.address,total,sumN};
+    }
+  }
+  PERSONNEL_CACHE.set(wb,out);return out;
+}
+
+function isCompoundExcelFile(buf){
+  const b=new Uint8Array(buf,0,Math.min(buf.byteLength,8)),sig=[0xD0,0xCF,0x11,0xE0,0xA1,0xB1,0x1A,0xE1];
+  return b.length===8&&sig.every((v,i)=>b[i]===v);
+}
+async function getExcelizeWASM(){
+  if(typeof excelizeWASM==='undefined'||typeof excelizeWASM.init!=='function')throw new Error('检测到加密主表，但解密组件加载失败。请检查网络连接后刷新页面重试。');
+  try{
+    if(!excelizeReadyPromise)excelizeReadyPromise=excelizeWASM.init(EXCELIZE_WASM_URL);
+    return await excelizeReadyPromise;
+  }catch(initError){
+    excelizeReadyPromise=null;
+    throw new Error('解密组件初始化失败。请检查网络连接后刷新页面重试。');
+  }
+}
+async function readMainWorkbook(file){
+  if(typeof XLSX==='undefined')throw new Error('Excel 读取组件加载失败，请检查网络连接后刷新页面重试。');
+  const buf=await file.arrayBuffer();
+  try{return XLSX.read(buf,{type:'array',raw:true,cellDates:false});}
+  catch(readError){
+    if(!isCompoundExcelFile(buf))throw new Error('文件读取失败：'+(readError&&readError.message?readError.message:'文件格式无法识别'));
+    const excelize=await getExcelizeWASM();
+    let decryptedBook;
+    try{
+      decryptedBook=await excelize.OpenReader(new Uint8Array(buf),{Password:MAIN_WORKBOOK_PASSWORD});
+      if(!decryptedBook||decryptedBook.error)throw new Error(decryptedBook&&decryptedBook.error?decryptedBook.error:'未返回工作簿');
+    }
+    catch(decryptError){throw new Error('主表解密失败，请确认文件密码为 SHIYE，且上传的是有效的 .xlsx 文件。');}
+    let decrypted;
+    try{
+      decrypted=await decryptedBook.WriteToBuffer();
+      if(!decrypted||decrypted.error||!decrypted.buffer)throw new Error(decrypted&&decrypted.error?decrypted.error:'未返回工作簿数据');
+    }
+    catch(outputError){throw new Error('主表已解密，但无法在浏览器内存中转换为可检查格式。');}
+    try{return XLSX.read(decrypted.buffer,{type:'array',raw:true,cellDates:false});}
+    catch(parseError){throw new Error('主表已解密，但内容读取失败：'+(parseError&&parseError.message?parseError.message:'未知错误'));}
+  }
+}
 
 // findTotalRow — 完整镜像 Python find_total_row
 function findTotalRow(ws){
@@ -187,20 +264,10 @@ function rule3(wb){
 // ═══ 规则4：人员编制 ═══
 function rule4(wb){
   const res={rule:'规则4-人员编制',passed:true,message:'',details:{}};
-  const sh=getSheet(wb,'利润总表');if(!sh){res.passed=false;res.message='未找到利润总表';return res;}
-  const ws=sh.ws;
-  let txt=null,pos=null;
-  const b30=String(getCell(ws,30,2)||''),b29=String(getCell(ws,29,2)||'');
-  if(b30.includes('人员编制')){txt=b30;pos='B30';}else if(b29.includes('人员编制')){txt=b29;pos='B29';}
-  else{res.passed=false;res.message='B29和B30单元格都未找到人员编制信息';return res;}
-  const m1=txt.match(/人员编制为(\d+)人/);
-  if(!m1){res.passed=false;res.message='未找到人员编制信息';return res;}
-  const total=parseInt(m1[1]);
-  const rem=txt.slice(txt.indexOf(m1[0])+m1[0].length).replace(/\d+[日号]/g,'');
-  const nums=rem.match(/\d+/g)||[];
-  const sumN=nums.reduce((a,n)=>a+parseInt(n),0);
-  if(total===sumN)res.message='人员编制核对正确: 总计'+total+'人（位置：'+pos+'）';
-  else{res.passed=false;res.message='人员编制不符: 总计应为'+total+'人，实际合计'+sumN+'人（位置：'+pos+'）';}
+  const info=getPersonnelInfo(wb);
+  if(!info.ok){res.passed=false;res.message=info.error;return res;}
+  if(info.total===info.sumN)res.message='人员编制核对正确: 总计'+info.total+'人（位置：'+info.address+'）';
+  else{res.passed=false;res.message='人员编制不符: 总计应为'+info.total+'人，实际合计'+info.sumN+'人（位置：'+info.address+'）';}
   return res;
 }
 
@@ -221,6 +288,15 @@ function rule5(wb){
     pct=toNum(pct);
     const exp=(isNaN(c5)?0:c5)*(isNaN(pct)?0:pct);
     if(!cmp(exp,amt,row===5?0.02:TOL))errs.push('第'+row+'行: 期望'+exp.toFixed(2)+'，实际'+amt);
+    const company=String(getCell(dw,row,4)??'').trim(),gRaw=getCell(dw,row,7),gText=String(gRaw??'').trim();
+    if(company==='成都世野酒店集团有限公司'){
+      if(gText!=='n.a'&&gText!=='N/A')errs.push('第'+row+'行: D列为成都世野酒店集团有限公司时，G列只能填写n.a或N/A，实际为'+(gText||'空白'));
+    }else{
+      const g=toNum(gRaw);
+      if(isNaN(g))errs.push('第'+row+'行: G列应为F列×0.8，实际为空白或非数值');
+      else if(isNaN(amt))errs.push('第'+row+'行: F列为空白或非数值，无法核对G列');
+      else{const expG=amt*0.8;if(!cmp(expG,g,TOL))errs.push('第'+row+'行: G列应为'+expG.toFixed(2)+'（F列×0.8），实际为'+g);}
+    }
     row++;
   }
   if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details['错误列表']=errs;}else res.message='股东分红计算正确';
@@ -287,9 +363,12 @@ function rule9(wb){
   for(const c of[4,5,6]){const v=toNum(getCell(cw,tr,c));if(!isNaN(v))cTot+=v;}
   for(const c of[3,4,5]){const v=toNum(getCell(pw,14,c));if(!isNaN(v))pTot+=v;}
   if(!cmp(cTot,pTot))errs.push('营业成本总计'+cTot.toFixed(2)+'与利润总表'+pTot.toFixed(2)+'不符');
-  let emp=1;
-  for(const row of[30,29]){const v=String(getCell(pw,row,2)||'');if(v.includes('人员编制')){const m=v.match(/人员编制为(\d+)人/);if(m){emp=parseInt(m[1]);break;}}}
-  for(const[kw,nm]of Object.entries(EMP_CATS)){for(let r=4;r<tr;r++){const cv=String(getCell(cw,r,3)||'');if(cv.includes(kw)){let t=0,cnt=0;for(const c of[4,5,6]){const v=toNum(getCell(cw,r,c));if(!isNaN(v)){t+=v;cnt++;}}if(cnt>0)calc.push(nm+'：'+(t/cnt/emp).toFixed(2)+'元');break;}}}
+  const personnel=getPersonnelInfo(wb);
+  if(!personnel.ok)errs.push('人员编制信息错误：'+personnel.error);
+  else{
+    const emp=personnel.total;
+    for(const[kw,nm]of Object.entries(EMP_CATS)){for(let r=4;r<tr;r++){const cv=String(getCell(cw,r,3)||'');if(cv.includes(kw)){let t=0,cnt=0;for(const c of[4,5,6]){const v=toNum(getCell(cw,r,c));if(!isNaN(v)){t+=v;cnt++;}}if(cnt>0)calc.push(nm+'：'+(t/cnt/emp).toFixed(2)+'元');break;}}}
+  }
   if(errs.length){res.passed=false;res.message='发现'+errs.length+'个错误';res.details={'错误列表':errs,'计算结果':calc};}else{res.message='营业成本计算正确';res.details['计算结果']=calc;}
   return res;
 }
@@ -340,7 +419,7 @@ function rule11(wb,attWbs){
       let bkSum=0;
       for(let r=1;r<=mr2;r++){const e=String(getCell(aws,r,5)||'');if(e.toUpperCase().includes('BOOKING')){const g=toNum(getCell(aws,r,7));if(!isNaN(g))bkSum+=g;}}
       const scol=4+i,sv=toNum(getCell(sw,8,scol));
-      if(bkSum>0&&!isNaN(sv)){const ratio=sv/bkSum;if(ratio>=0.149&&ratio<=0.151)calc.push('附件'+(i+1)+'检查通过: BOOKING佣金比例'+ratio.toFixed(3));else errs.push('附件'+(i+1)+' BOOKING佣金比例不在0.149-0.151范围: '+ratio.toFixed(3));}
+      if(bkSum>0&&!isNaN(sv)){const ratio=sv/bkSum;if(ratio>=0.149&&ratio<=0.25)calc.push('附件'+(i+1)+'检查通过: BOOKING佣金比例'+(ratio*100).toFixed(2)+'%');else errs.push('附件'+(i+1)+' BOOKING佣金比例不在14.9%-25%范围: '+(ratio*100).toFixed(4)+'%');}
       else calc.push('附件'+(i+1)+': BOOKING金额'+bkSum.toFixed(2)+'，未计算比例');
     }
   }else calc.push('附件未上传，已跳过BOOKING佣金核验');
@@ -498,8 +577,8 @@ document.getElementById('btnRun').addEventListener('click',async()=>{
   const btn=document.getElementById('btnRun'),prog=document.getElementById('progress'),rdiv=document.getElementById('report');
   btn.disabled=true;prog.style.display='block';rdiv.innerHTML='';setProg(5,'正在读取主表文件…');
   let wb;
-  try{const buf=await mainFile.arrayBuffer();wb=XLSX.read(buf,{type:'array',raw:true,cellDates:false});}
-  catch(e){rdiv.innerHTML='<div class="card" style="color:#c0392b;padding:20px">❌ 无法读取主表文件：'+esc(e.message)+'<br><br>请确认已去除 Excel 密码后再上传。</div>';btn.disabled=false;prog.style.display='none';return;}
+  try{wb=await readMainWorkbook(mainFile);}
+  catch(e){rdiv.innerHTML='<div class="card" style="color:#c0392b;padding:20px">❌ 无法读取主表文件：'+esc(e.message)+'</div>';btn.disabled=false;prog.style.display='none';return;}
   setProg(15,'正在读取附件文件…');
   const sAtt=sortAtt(attFiles),attWbs=[];
   for(const af of sAtt){try{const buf=await af.arrayBuffer();attWbs.push(XLSX.read(buf,{type:'array',raw:true,cellDates:false}));}catch(e){attWbs.push(null);}}
@@ -527,7 +606,8 @@ document.getElementById('btnRun').addEventListener('click',async()=>{
     const now=new Date();const ts=now.getFullYear()+pad2(now.getMonth()+1)+pad2(now.getDate())+'_'+pad2(now.getHours())+pad2(now.getMinutes())+pad2(now.getSeconds());
     const html=buildReport(results,fn,tv,dr,true);
     const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download='财务报表主表自动检查报告_'+ts+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),5000);
+    const project=getProjectName(fn)||'未知';
+    const a=document.createElement('a');a.href=url;a.download='财务报表主表自动检查报告_'+ts+'_'+project+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),5000);
   });
   btn.disabled=false;setTimeout(()=>{prog.style.display='none';},1200);
 });
