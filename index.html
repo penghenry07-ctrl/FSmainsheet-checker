@@ -289,8 +289,8 @@ function rule5(wb){
     const exp=(isNaN(c5)?0:c5)*(isNaN(pct)?0:pct);
     if(!cmp(exp,amt,row===5?0.02:TOL))errs.push('第'+row+'行: 期望'+exp.toFixed(2)+'，实际'+amt);
     const company=String(getCell(dw,row,4)??'').trim(),gRaw=getCell(dw,row,7),gText=String(gRaw??'').trim();
-    if(company==='成都世野酒店集团有限公司'){
-      if(gText!=='n.a'&&gText!=='N/A')errs.push('第'+row+'行: D列为成都世野酒店集团有限公司时，G列只能填写n.a或N/A，实际为'+(gText||'空白'));
+    if(company.endsWith('公司')){
+      if(gText!=='n/a'&&gText!=='n.a'&&gText!=='N/A')errs.push('第'+row+'行: D列以“公司”结尾时，G列只能填写n/a、n.a或N/A，实际为'+(gText||'空白'));
     }else{
       const g=toNum(gRaw);
       if(isNaN(g))errs.push('第'+row+'行: G列应为F列×0.8，实际为空白或非数值');
@@ -607,7 +607,7 @@ document.getElementById('btnRun').addEventListener('click',async()=>{
     const html=buildReport(results,fn,tv,dr,true);
     const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);
     const project=getProjectName(fn)||'未知';
-    const a=document.createElement('a');a.href=url;a.download='财务报表主表自动检查报告_'+ts+'_'+project+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),5000);
+    const a=document.createElement('a');a.href=url;a.download='财务报表主表自动检查报告_'+project+'_'+ts+'.html';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),5000);
   });
   btn.disabled=false;setTimeout(()=>{prog.style.display='none';},1200);
 });
